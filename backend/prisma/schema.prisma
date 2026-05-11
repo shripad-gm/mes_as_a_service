@@ -1,0 +1,1405 @@
+// ============================================================
+// MES-as-a-Service — Garment MSME Platform
+// Prisma Schema for Neon DB (PostgreSQL)
+// Stack: Express + Node.js + Neon (serverless Postgres)
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")         // Neon pooled connection
+  directUrl = env("DIRECT_DATABASE_URL")  // Neon direct (for migrations)
+}
+
+// ============================================================
+// Multi-tenant root — one row per garment factory
+// ============================================================
+
+model Organization {
+  id             String   @id @default(cuid())
+  name           String
+  slug           String   @unique                // URL-friendly identifier
+  gstNumber      String?
+  address        String?
+  city           String?
+  state          String?
+  country        String   @default("IN")
+  phone          String?
+  email          String?
+  logoUrl        String?
+  timezone       String   @default("Asia/Kolkata")
+  currency       String   @default("INR")
+  isActive       Boolean  @default(true)
+  subscriptionTier SubscriptionTier @default(STARTER)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Relations
+  users          User[]
+  facilities     Facility[]
+  productLines   ProductLine[]
+  orders         Order[]
+  customers      Customer[]
+  suppliers      Supplier[]
+  materials      Material[]
+  employees      Employee[]
+  shifts         Shift[]
+  workCenters    WorkCenter[]
+  machineTypes   MachineType[]
+  defectTypes    DefectType[]
+  auditLogs      AuditLog[]
+  aiAssistantLogs AiAssistantLog[]
+  kpiSnapshots   KpiSnapshot[]
+  integrations   Integration[]
+
+  @@map("organizations")
+}
+
+enum SubscriptionTier {
+  STARTER   // Up to 50 employees, basic features
+  GROWTH    // Up to 200 employees + AI assistant
+  ENTERPRISE // Unlimited + CV defect detection + custom integrations
+}
+
+// ============================================================
+// FACILITY — Physical factory/plant (an org can have multiple)
+// ============================================================
+
+model Facility {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  code           String                          // e.g., "FAC-01"
+  address        String?
+  floorAreaSqFt  Float?
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  floors         Floor[]
+  workCenters    WorkCenter[]
+  employees      Employee[]
+
+  @@unique([organizationId, code])
+  @@map("facilities")
+}
+
+model Floor {
+  id         String   @id @default(cuid())
+  facilityId String
+  name       String                              // "Ground Floor", "Line A"
+  floorNumber Int
+  layoutJson String?                             // JSON blueprint for visual floor map
+  createdAt  DateTime @default(now())
+
+  facility   Facility    @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  workCenters WorkCenter[]
+
+  @@unique([facilityId, floorNumber])
+  @@map("floors")
+}
+
+// ============================================================
+// USERS & AUTH
+// ============================================================
+
+model User {
+  id             String   @id @default(cuid())
+  organizationId String
+  email          String   @unique
+  passwordHash   String
+  fullName       String
+  phone          String?
+  avatarUrl      String?
+  role           UserRole @default(SUPERVISOR)
+  isActive       Boolean  @default(true)
+  lastLoginAt    DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  refreshTokens  RefreshToken[]
+  assignedOrders OrderAssignment[]
+  auditLogs      AuditLog[]
+  aiLogs         AiAssistantLog[]
+  qualityChecks  QualityCheck[]
+  notifications  Notification[]
+
+  @@map("users")
+}
+
+enum UserRole {
+  SUPER_ADMIN   // Platform admin (Anthropic-level)
+  ORG_ADMIN     // Factory owner/director
+  PRODUCTION_MANAGER
+  SUPERVISOR
+  QUALITY_INSPECTOR
+  STORE_KEEPER
+  FLOOR_OPERATOR // Read-only dashboards
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("refresh_tokens")
+}
+
+// ============================================================
+// PRODUCT CATALOG — Garment-specific product definitions
+// ============================================================
+
+model ProductLine {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String                          // "Men's Formal Shirts", "Kids Tees"
+  code           String
+  category       GarmentCategory
+  fabricType     String?                         // Cotton, Polyester, Blends
+  description    String?
+  imageUrl       String?
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  styleVariants  StyleVariant[]
+
+  @@unique([organizationId, code])
+  @@map("product_lines")
+}
+
+enum GarmentCategory {
+  MENS_FORMAL
+  MENS_CASUAL
+  WOMENS_FORMAL
+  WOMENS_CASUAL
+  KIDS
+  SPORTSWEAR
+  INNERWEAR
+  DENIM
+  ETHNIC
+  WORKWEAR
+  OTHER
+}
+
+model StyleVariant {
+  id              String   @id @default(cuid())
+  productLineId   String
+  styleCode       String                         // e.g., "SH-2024-BLU-M"
+  name            String
+  colorCode       String?
+  colorName       String?
+  sizeRange       String[]                       // ["XS","S","M","L","XL","XXL"]
+  fabricGsm       Float?                         // Grams per square meter
+  patternType     String?                        // "Solid","Stripes","Checks"
+  seasonTag       String?                        // "SS2025","AW2024"
+  imageUrls       String[]
+  techPackUrl     String?                        // CAD/tech pack document URL
+  smv             Float?                         // Standard Minute Value (key garment KPI)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  productLine     ProductLine @relation(fields: [productLineId], references: [id], onDelete: Cascade)
+  bom             BillOfMaterial[]
+  orderLineItems  OrderLineItem[]
+  routings        ProductionRouting[]
+
+  @@unique([productLineId, styleCode])
+  @@map("style_variants")
+}
+
+// ============================================================
+// BILL OF MATERIALS — What goes into making a garment
+// ============================================================
+
+model BillOfMaterial {
+  id             String  @id @default(cuid())
+  styleVariantId String
+  materialId     String
+  quantity       Float                           // Per garment (in material's unit)
+  unit           MeasurementUnit
+  wastePercentage Float  @default(0)             // Expected material waste %
+  isOptional     Boolean @default(false)
+  notes          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  styleVariant   StyleVariant @relation(fields: [styleVariantId], references: [id], onDelete: Cascade)
+  material       Material     @relation(fields: [materialId], references: [id])
+
+  @@unique([styleVariantId, materialId])
+  @@map("bill_of_materials")
+}
+
+// ============================================================
+// MATERIALS & INVENTORY — Fabric, trims, accessories
+// ============================================================
+
+model Material {
+  id             String   @id @default(cuid())
+  organizationId String
+  code           String
+  name           String
+  type           MaterialType
+  unit           MeasurementUnit
+  description    String?
+  fabricComposition String?                      // "60% Cotton 40% Polyester"
+  colorCode      String?
+  colorName      String?
+  imageUrl       String?
+  minStockLevel  Float    @default(0)            // Reorder point
+  maxStockLevel  Float?
+  unitCost       Float    @default(0)
+  hsCode         String?                        // HS code for export tracking
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  bomUsages      BillOfMaterial[]
+  stockEntries   StockEntry[]
+  stockMovements StockMovement[]
+  supplierMaterials SupplierMaterial[]
+
+  @@unique([organizationId, code])
+  @@map("materials")
+}
+
+enum MaterialType {
+  FABRIC_WOVEN
+  FABRIC_KNIT
+  FABRIC_NON_WOVEN
+  THREAD
+  BUTTON
+  ZIPPER
+  ELASTIC
+  LABEL
+  PACKAGING
+  DYE_CHEMICAL
+  ACCESSORY
+  OTHER
+}
+
+enum MeasurementUnit {
+  METERS
+  YARDS
+  KG
+  GRAMS
+  PIECES
+  DOZENS
+  ROLLS
+  BOXES
+  LITERS
+}
+
+model StockEntry {
+  id             String   @id @default(cuid())
+  materialId     String
+  facilityId     String?
+  batchNumber    String?
+  quantity       Float
+  unit           MeasurementUnit
+  receivedDate   DateTime @default(now())
+  expiryDate     DateTime?
+  supplierLotNo  String?
+  qualityStatus  StockQualityStatus @default(PENDING_INSPECTION)
+  notes          String?
+  createdAt      DateTime @default(now())
+
+  material       Material  @relation(fields: [materialId], references: [id])
+  movements      StockMovement[]
+  grn            GoodsReceiptNote? @relation(fields: [grnId], references: [id])
+  grnId          String?
+
+  @@map("stock_entries")
+}
+
+enum StockQualityStatus {
+  PENDING_INSPECTION
+  APPROVED
+  REJECTED
+  QUARANTINE
+}
+
+model StockMovement {
+  id             String   @id @default(cuid())
+  materialId     String
+  stockEntryId   String?
+  movementType   StockMovementType
+  quantity       Float                           // Negative = consumption
+  unit           MeasurementUnit
+  referenceId    String?                        // Order ID, WO ID, etc.
+  referenceType  String?                        // "ORDER", "WORK_ORDER", "ADJUSTMENT"
+  performedById  String?
+  notes          String?
+  createdAt      DateTime @default(now())
+
+  material       Material   @relation(fields: [materialId], references: [id])
+  stockEntry     StockEntry? @relation(fields: [stockEntryId], references: [id])
+
+  @@map("stock_movements")
+}
+
+enum StockMovementType {
+  RECEIPT          // Inward from supplier
+  ISSUE_PRODUCTION // Issued to shop floor
+  RETURN_PRODUCTION // Returned from shop floor
+  ADJUSTMENT_IN
+  ADJUSTMENT_OUT
+  TRANSFER
+  WASTE
+}
+
+// ============================================================
+// SUPPLIERS & PROCUREMENT
+// ============================================================
+
+model Supplier {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  code           String
+  contactPerson  String?
+  email          String?
+  phone          String?
+  address        String?
+  city           String?
+  gstNumber      String?
+  paymentTerms   String?                        // "Net 30", "Advance"
+  leadTimeDays   Int      @default(7)
+  rating         Float?                         // 0-5 supplier rating
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  materials      SupplierMaterial[]
+  purchaseOrders PurchaseOrder[]
+  grns           GoodsReceiptNote[]
+
+  @@unique([organizationId, code])
+  @@map("suppliers")
+}
+
+model SupplierMaterial {
+  id             String  @id @default(cuid())
+  supplierId     String
+  materialId     String
+  supplierCode   String?                        // Supplier's own code for this material
+  unitCost       Float
+  minOrderQty    Float   @default(1)
+  leadTimeDays   Int     @default(7)
+  isPreferred    Boolean @default(false)
+
+  supplier       Supplier @relation(fields: [supplierId], references: [id])
+  material       Material @relation(fields: [materialId], references: [id])
+
+  @@unique([supplierId, materialId])
+  @@map("supplier_materials")
+}
+
+model PurchaseOrder {
+  id             String   @id @default(cuid())
+  organizationId String?
+  supplierId     String
+  poNumber       String   @unique
+  status         PoStatus @default(DRAFT)
+  expectedDate   DateTime?
+  totalAmount    Float    @default(0)
+  currency       String   @default("INR")
+  notes          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  supplier       Supplier  @relation(fields: [supplierId], references: [id])
+  lineItems      PurchaseOrderItem[]
+  grns           GoodsReceiptNote[]
+
+  @@map("purchase_orders")
+}
+
+enum PoStatus {
+  DRAFT
+  SENT
+  ACKNOWLEDGED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CANCELLED
+}
+
+model PurchaseOrderItem {
+  id              String  @id @default(cuid())
+  purchaseOrderId String
+  materialId      String?
+  description     String
+  quantity        Float
+  unit            MeasurementUnit
+  unitCost        Float
+  totalCost       Float
+  receivedQty     Float   @default(0)
+
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+
+  @@map("purchase_order_items")
+}
+
+model GoodsReceiptNote {
+  id              String   @id @default(cuid())
+  organizationId  String?
+  supplierId      String
+  purchaseOrderId String?
+  grnNumber       String   @unique
+  receivedDate    DateTime @default(now())
+  receivedById    String?
+  vehicleNumber   String?
+  invoiceNumber   String?
+  notes           String?
+  createdAt       DateTime @default(now())
+
+  supplier        Supplier      @relation(fields: [supplierId], references: [id])
+  purchaseOrder   PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
+  stockEntries    StockEntry[]
+
+  @@map("goods_receipt_notes")
+}
+
+// ============================================================
+// CUSTOMERS & SALES ORDERS
+// ============================================================
+
+model Customer {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  code           String
+  contactPerson  String?
+  email          String?
+  phone          String?
+  address        String?
+  city           String?
+  country        String   @default("IN")
+  gstNumber      String?
+  paymentTerms   String?
+  creditLimit    Float?
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  orders         Order[]
+
+  @@unique([organizationId, code])
+  @@map("customers")
+}
+
+model Order {
+  id              String      @id @default(cuid())
+  organizationId  String
+  customerId      String
+  orderNumber     String      @unique
+  status          OrderStatus @default(DRAFT)
+  orderType       OrderType   @default(MAKE_TO_ORDER)
+  priority        Priority    @default(MEDIUM)
+  orderDate       DateTime    @default(now())
+  requiredDate    DateTime
+  promisedDate    DateTime?
+  shippedDate     DateTime?
+  totalPieces     Int         @default(0)
+  completedPieces Int         @default(0)
+  totalAmount     Float       @default(0)
+  currency        String      @default("INR")
+  paymentStatus   PaymentStatus @default(PENDING)
+  shippingAddress String?
+  specialInstructions String?
+  buyerPoNumber   String?                        // Buyer's own PO number
+  incoterms       String?                        // FOB, CIF, etc. for export
+  destinationCountry String?                     // For export orders
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  organization    Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer        Customer          @relation(fields: [customerId], references: [id])
+  lineItems       OrderLineItem[]
+  workOrders      WorkOrder[]
+  assignments     OrderAssignment[]
+  shipments       Shipment[]
+
+  @@map("orders")
+}
+
+enum OrderStatus {
+  DRAFT
+  CONFIRMED
+  IN_PRODUCTION
+  QC_PENDING
+  READY_TO_SHIP
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  ON_HOLD
+}
+
+enum OrderType {
+  MAKE_TO_ORDER
+  MAKE_TO_STOCK
+  SAMPLE
+  REWORK
+}
+
+enum Priority {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum PaymentStatus {
+  PENDING
+  PARTIAL
+  PAID
+  OVERDUE
+}
+
+model OrderLineItem {
+  id             String  @id @default(cuid())
+  orderId        String
+  styleVariantId String
+  size           String
+  color          String?
+  quantityOrdered Int
+  quantityProduced Int   @default(0)
+  quantityPassed Int     @default(0)  // After QC
+  unitPrice      Float
+  totalPrice     Float
+  notes          String?
+  createdAt      DateTime @default(now())
+
+  order          Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  styleVariant   StyleVariant @relation(fields: [styleVariantId], references: [id])
+  workOrderItems WorkOrderItem[]
+
+  @@map("order_line_items")
+}
+
+model OrderAssignment {
+  id         String   @id @default(cuid())
+  orderId    String
+  userId     String
+  role       String                             // "Owner", "QC Lead", "Production Lead"
+  assignedAt DateTime @default(now())
+
+  order      Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  user       User  @relation(fields: [userId], references: [id])
+
+  @@unique([orderId, userId])
+  @@map("order_assignments")
+}
+
+// ============================================================
+// PRODUCTION ROUTING — Operation sequence for a style
+// ============================================================
+
+model ProductionRouting {
+  id             String  @id @default(cuid())
+  styleVariantId String
+  operationCode  String
+  operationName  String                          // "Cutting", "Stitching-Sleeve", "Button Attach"
+  sequence       Int                             // Order of operations
+  workCenterType WorkCenterType
+  smv            Float                           // Standard Minute Value per operation
+  setupTimeMin   Float   @default(0)
+  skillRequired  SkillLevel @default(BASIC)
+  isOptional     Boolean @default(false)
+  notes          String?
+
+  styleVariant   StyleVariant @relation(fields: [styleVariantId], references: [id], onDelete: Cascade)
+  workOrderOps   WorkOrderOperation[]
+
+  @@unique([styleVariantId, sequence])
+  @@map("production_routings")
+}
+
+enum WorkCenterType {
+  CUTTING
+  FUSING
+  STITCHING
+  EMBROIDERY
+  PRINTING
+  WASHING
+  FINISHING
+  PACKING
+  QUALITY_CHECK
+  IRONING
+}
+
+enum SkillLevel {
+  BASIC
+  INTERMEDIATE
+  ADVANCED
+  EXPERT
+}
+
+// ============================================================
+// WORK ORDERS — Core production execution entity
+// ============================================================
+
+model WorkOrder {
+  id              String        @id @default(cuid())
+  orderId         String
+  workOrderNumber String        @unique
+  status          WoStatus      @default(PLANNED)
+  priority        Priority      @default(MEDIUM)
+  facilityId      String?
+  plannedStartDate DateTime
+  plannedEndDate   DateTime
+  actualStartDate  DateTime?
+  actualEndDate    DateTime?
+  totalPieces      Int
+  completedPieces  Int          @default(0)
+  rejectedPieces   Int          @default(0)
+  reworkPieces     Int          @default(0)
+  notes            String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  order            Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  lineItems        WorkOrderItem[]
+  operations       WorkOrderOperation[]
+  qualityChecks    QualityCheck[]
+  productionLogs   ProductionLog[]
+  materialIssuances MaterialIssuance[]
+
+  @@map("work_orders")
+}
+
+enum WoStatus {
+  PLANNED
+  RELEASED
+  IN_PROGRESS
+  PARTIALLY_COMPLETE
+  COMPLETE
+  ON_HOLD
+  CANCELLED
+}
+
+model WorkOrderItem {
+  id              String  @id @default(cuid())
+  workOrderId     String
+  orderLineItemId String
+  size            String
+  quantityPlanned Int
+  quantityProduced Int    @default(0)
+  quantityPassed  Int     @default(0)
+
+  workOrder       WorkOrder     @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  orderLineItem   OrderLineItem @relation(fields: [orderLineItemId], references: [id])
+
+  @@map("work_order_items")
+}
+
+model WorkOrderOperation {
+  id               String   @id @default(cuid())
+  workOrderId      String
+  routingId        String?
+  workCenterId     String?
+  operationName    String
+  sequence         Int
+  status           WoOpStatus @default(PENDING)
+  plannedStartTime DateTime?
+  plannedEndTime   DateTime?
+  actualStartTime  DateTime?
+  actualEndTime    DateTime?
+  assignedEmployeeId String?
+  plannedPieces    Int
+  completedPieces  Int      @default(0)
+  smv              Float?
+  actualMinutes    Float?
+  efficiency       Float?   // (SMV * pieces) / actualMinutes * 100
+  notes            String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  workOrder        WorkOrder          @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  routing          ProductionRouting? @relation(fields: [routingId], references: [id])
+  workCenter       WorkCenter?        @relation(fields: [workCenterId], references: [id])
+  employee         Employee?          @relation(fields: [assignedEmployeeId], references: [id])
+  productionLogs   ProductionLog[]
+
+  @@map("work_order_operations")
+}
+
+enum WoOpStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETE
+  ON_HOLD
+  SKIPPED
+}
+
+model ProductionLog {
+  id               String   @id @default(cuid())
+  workOrderId      String
+  workOrderOpId    String?
+  employeeId       String?
+  workCenterId     String?
+  machineId        String?
+  logTime          DateTime @default(now())
+  piecesCompleted  Int      @default(0)
+  defectivePieces  Int      @default(0)
+  logType          ProdLogType @default(HOURLY_UPDATE)
+  notes            String?
+
+  workOrder        WorkOrder          @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  workOrderOp      WorkOrderOperation? @relation(fields: [workOrderOpId], references: [id])
+  employee         Employee?          @relation(fields: [employeeId], references: [id])
+  workCenter       WorkCenter?        @relation(fields: [workCenterId], references: [id])
+  machine          Machine?           @relation(fields: [machineId], references: [id])
+
+  @@map("production_logs")
+}
+
+enum ProdLogType {
+  SHIFT_START
+  HOURLY_UPDATE
+  BREAK
+  DOWNTIME
+  SHIFT_END
+  MANUAL_ENTRY
+}
+
+model MaterialIssuance {
+  id           String   @id @default(cuid())
+  workOrderId  String
+  materialId   String?
+  issuedQty    Float
+  unit         MeasurementUnit
+  issuedById   String?
+  issuedAt     DateTime @default(now())
+  returnedQty  Float    @default(0)
+  notes        String?
+
+  workOrder    WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  @@map("material_issuances")
+}
+
+// ============================================================
+// WORK CENTERS & MACHINES
+// ============================================================
+
+model WorkCenter {
+  id             String         @id @default(cuid())
+  organizationId String
+  facilityId     String?
+  floorId        String?
+  name           String
+  code           String
+  type           WorkCenterType
+  capacity       Int            @default(1)    // Max concurrent operations
+  isActive       Boolean        @default(true)
+  positionX      Float?                        // For floor map visualization
+  positionY      Float?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  facility       Facility?          @relation(fields: [facilityId], references: [id])
+  floor          Floor?             @relation(fields: [floorId], references: [id])
+  machines       Machine[]
+  operations     WorkOrderOperation[]
+  productionLogs ProductionLog[]
+  employees      EmployeeWorkCenter[]
+
+  @@unique([organizationId, code])
+  @@map("work_centers")
+}
+
+model MachineType {
+  id             String  @id @default(cuid())
+  organizationId String
+  name           String                         // "Single Needle", "Overlock", "Flatlock"
+  category       WorkCenterType
+  description    String?
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  machines       Machine[]
+
+  @@map("machine_types")
+}
+
+model Machine {
+  id             String        @id @default(cuid())
+  workCenterId   String
+  machineTypeId  String?
+  name           String
+  serialNumber   String?
+  make           String?                        // Brand: Juki, Brother, Pegasus
+  model          String?
+  purchaseDate   DateTime?
+  status         MachineStatus @default(IDLE)
+  lastServiceDate DateTime?
+  nextServiceDate DateTime?
+  hourlyRunCost  Float?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  workCenter     WorkCenter    @relation(fields: [workCenterId], references: [id], onDelete: Cascade)
+  machineType    MachineType?  @relation(fields: [machineTypeId], references: [id])
+  downtimeLogs   MachineDowntime[]
+  maintenanceLogs MaintenanceLog[]
+  productionLogs ProductionLog[]
+
+  @@map("machines")
+}
+
+enum MachineStatus {
+  IDLE
+  RUNNING
+  MAINTENANCE
+  BREAKDOWN
+  DECOMMISSIONED
+}
+
+model MachineDowntime {
+  id          String         @id @default(cuid())
+  machineId   String
+  startTime   DateTime
+  endTime     DateTime?
+  reason      DowntimeReason
+  description String?
+  reportedById String?
+  resolvedById String?
+  resolutionNotes String?
+  durationMinutes Float?     // Computed or stored
+  createdAt   DateTime       @default(now())
+
+  machine     Machine @relation(fields: [machineId], references: [id], onDelete: Cascade)
+
+  @@map("machine_downtimes")
+}
+
+enum DowntimeReason {
+  BREAKDOWN
+  PLANNED_MAINTENANCE
+  MATERIAL_SHORTAGE
+  POWER_FAILURE
+  OPERATOR_ABSENT
+  SETUP_CHANGEOVER
+  QUALITY_ISSUE
+  OTHER
+}
+
+model MaintenanceLog {
+  id           String   @id @default(cuid())
+  machineId    String
+  type         MaintenanceType
+  description  String
+  performedById String?
+  performedAt  DateTime @default(now())
+  cost         Float?
+  partsReplaced String?
+  nextDueDate  DateTime?
+
+  machine      Machine @relation(fields: [machineId], references: [id], onDelete: Cascade)
+
+  @@map("maintenance_logs")
+}
+
+enum MaintenanceType {
+  PREVENTIVE
+  CORRECTIVE
+  PREDICTIVE
+  LUBRICATION
+  CALIBRATION
+}
+
+// ============================================================
+// HR — EMPLOYEES & SHIFTS (Garment-specific)
+// ============================================================
+
+model Employee {
+  id             String      @id @default(cuid())
+  organizationId String
+  facilityId     String?
+  employeeCode   String
+  fullName       String
+  phone          String?
+  email          String?
+  gender         String?
+  dateOfBirth    DateTime?
+  joiningDate    DateTime
+  designation    String?
+  department     String?
+  skillLevel     SkillLevel  @default(BASIC)
+  isActive       Boolean     @default(true)
+  aadharNumber   String?                        // Indian ID for compliance
+  pfNumber       String?                        // Provident Fund
+  esiNumber      String?                        // Employee State Insurance
+  bankAccountNo  String?
+  ifscCode       String?
+  baseSalary     Float?
+  incentiveRate  Float?                         // Per extra piece produced
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  facility       Facility?        @relation(fields: [facilityId], references: [id])
+  skills         EmployeeSkill[]
+  workCenters    EmployeeWorkCenter[]
+  attendances    Attendance[]
+  operations     WorkOrderOperation[]
+  productionLogs ProductionLog[]
+  incentives     EmployeeIncentive[]
+  leaveRequests  LeaveRequest[]
+
+  @@unique([organizationId, employeeCode])
+  @@map("employees")
+}
+
+model EmployeeSkill {
+  id           String     @id @default(cuid())
+  employeeId   String
+  operationType WorkCenterType
+  skillLevel   SkillLevel
+  certifiedAt  DateTime?
+  certifiedBy  String?
+
+  employee     Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, operationType])
+  @@map("employee_skills")
+}
+
+model EmployeeWorkCenter {
+  id           String   @id @default(cuid())
+  employeeId   String
+  workCenterId String
+  isPrimary    Boolean  @default(false)
+  assignedAt   DateTime @default(now())
+
+  employee     Employee   @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  workCenter   WorkCenter @relation(fields: [workCenterId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, workCenterId])
+  @@map("employee_work_centers")
+}
+
+model Shift {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String                         // "Morning", "Afternoon", "Night"
+  startTime      String                         // "08:00"
+  endTime        String                         // "17:00"
+  breakMinutes   Int      @default(30)
+  isActive       Boolean  @default(true)
+  daysOfWeek     Int[]                          // [1,2,3,4,5] = Mon-Fri
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  attendances    Attendance[]
+
+  @@map("shifts")
+}
+
+model Attendance {
+  id           String           @id @default(cuid())
+  employeeId   String
+  shiftId      String?
+  date         DateTime
+  checkInTime  DateTime?
+  checkOutTime DateTime?
+  status       AttendanceStatus @default(PRESENT)
+  overtimeMin  Float            @default(0)
+  notes        String?
+  createdAt    DateTime         @default(now())
+
+  employee     Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  shift        Shift?   @relation(fields: [shiftId], references: [id])
+
+  @@unique([employeeId, date])
+  @@map("attendances")
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  HALF_DAY
+  LATE
+  LEAVE
+  HOLIDAY
+}
+
+model LeaveRequest {
+  id          String      @id @default(cuid())
+  employeeId  String
+  leaveType   LeaveType
+  fromDate    DateTime
+  toDate      DateTime
+  reason      String?
+  status      LeaveStatus @default(PENDING)
+  approvedById String?
+  createdAt   DateTime    @default(now())
+
+  employee    Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@map("leave_requests")
+}
+
+enum LeaveType {
+  CASUAL
+  SICK
+  EARNED
+  MATERNITY
+  PATERNITY
+  UNPAID
+}
+
+enum LeaveStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+model EmployeeIncentive {
+  id          String   @id @default(cuid())
+  employeeId  String
+  workOrderId String?
+  periodMonth Int                              // 1-12
+  periodYear  Int
+  targetPieces Int
+  actualPieces Int
+  incentiveAmount Float
+  paidAt      DateTime?
+  notes       String?
+  createdAt   DateTime @default(now())
+
+  employee    Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@map("employee_incentives")
+}
+
+// ============================================================
+// QUALITY CONTROL — The differentiation module
+// ============================================================
+
+model DefectType {
+  id             String  @id @default(cuid())
+  organizationId String
+  code           String
+  name           String                         // "Puckering", "Skip Stitch", "Shade Variation"
+  category       DefectCategory
+  severity       DefectSeverity @default(MINOR)
+  description    String?
+  imageUrl       String?
+  isActive       Boolean @default(true)
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  defectFindings DefectFinding[]
+
+  @@unique([organizationId, code])
+  @@map("defect_types")
+}
+
+enum DefectCategory {
+  STITCHING
+  FABRIC
+  MEASUREMENT
+  TRIMS
+  EMBELLISHMENT
+  WASHING
+  FINISHING
+  PACKING
+}
+
+enum DefectSeverity {
+  CRITICAL    // Must reject
+  MAJOR       // Rework required
+  MINOR       // Cosmetic, may pass
+}
+
+model QualityCheck {
+  id             String      @id @default(cuid())
+  workOrderId    String
+  inspectorId    String?
+  checkType      QcCheckType
+  checkStage     QcStage
+  inspectedAt    DateTime    @default(now())
+  sampleSize     Int
+  passedCount    Int         @default(0)
+  failedCount    Int         @default(0)
+  reworkCount    Int         @default(0)
+  result         QcResult
+  aqlLevel       Float?                         // AQL 1.5, 2.5, 4.0
+  notes          String?
+  imageUrls      String[]                       // Evidence photos
+  cvInspectionId String?                        // Link to AI/CV inspection
+
+  workOrder      WorkOrder   @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  inspector      User?       @relation(fields: [inspectorId], references: [id])
+  defectFindings DefectFinding[]
+
+  @@map("quality_checks")
+}
+
+enum QcCheckType {
+  IN_LINE       // During production
+  END_OF_LINE   // End of sewing line
+  FINAL         // Pre-shipment
+  FABRIC        // Incoming fabric inspection
+  TRIM          // Trims inspection
+}
+
+enum QcStage {
+  CUTTING
+  SEWING
+  WASHING
+  FINISHING
+  PACKING
+  PRE_SHIPMENT
+}
+
+enum QcResult {
+  PASS
+  FAIL
+  CONDITIONAL_PASS
+  PENDING
+}
+
+model DefectFinding {
+  id            String  @id @default(cuid())
+  qualityCheckId String
+  defectTypeId  String
+  count         Int     @default(1)
+  location      String?                        // "Left sleeve", "Back panel"
+  imageUrl      String?
+  isReworkable  Boolean @default(true)
+  notes         String?
+
+  qualityCheck  QualityCheck @relation(fields: [qualityCheckId], references: [id], onDelete: Cascade)
+  defectType    DefectType   @relation(fields: [defectTypeId], references: [id])
+
+  @@map("defect_findings")
+}
+
+// AI / Computer Vision inspection results
+model CvInspection {
+  id              String   @id @default(cuid())
+  workOrderId     String?
+  imageUrl        String
+  thumbnailUrl    String?
+  modelVersion    String?
+  inferredAt      DateTime @default(now())
+  predictions     Json                          // [{defectType, confidence, bbox}]
+  overallResult   QcResult
+  humanReviewedBy String?
+  humanOverride   QcResult?
+  notes           String?
+
+  @@map("cv_inspections")
+}
+
+// ============================================================
+// SHIPMENTS & LOGISTICS
+// ============================================================
+
+model Shipment {
+  id             String         @id @default(cuid())
+  orderId        String
+  shipmentNumber String         @unique
+  status         ShipmentStatus @default(PENDING)
+  carrier        String?
+  trackingNumber String?
+  shippedAt      DateTime?
+  estimatedArrival DateTime?
+  actualArrival  DateTime?
+  weight         Float?
+  cartons        Int?
+  totalPieces    Int?
+  packingListUrl String?
+  invoiceUrl     String?
+  notes          String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  order          Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  packingLists   PackingList[]
+
+  @@map("shipments")
+}
+
+enum ShipmentStatus {
+  PENDING
+  PACKED
+  DISPATCHED
+  IN_TRANSIT
+  DELIVERED
+  RETURNED
+}
+
+model PackingList {
+  id          String @id @default(cuid())
+  shipmentId  String
+  cartonNo    Int
+  styleCode   String?
+  size        String?
+  color       String?
+  quantity    Int
+  grossWeight Float?
+  netWeight   Float?
+
+  shipment    Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+
+  @@map("packing_lists")
+}
+
+// ============================================================
+// KPI & ANALYTICS — Pre-computed snapshots for dashboards
+// ============================================================
+
+model KpiSnapshot {
+  id             String   @id @default(cuid())
+  organizationId String
+  facilityId     String?
+  snapshotDate   DateTime
+  granularity    KpiGranularity
+  metric         String                         // "OEE","EFFICIENCY","DHU","THROUGHPUT"
+  value          Float
+  unit           String?
+  dimensionKey   String?                        // workCenterId, shiftId, etc.
+  dimensionValue String?
+  createdAt      DateTime @default(now())
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, snapshotDate, granularity, metric, dimensionKey, dimensionValue])
+  @@map("kpi_snapshots")
+}
+
+enum KpiGranularity {
+  HOURLY
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+// ============================================================
+// AI ASSISTANT — RAG conversation logs
+// ============================================================
+
+model AiAssistantLog {
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String?
+  sessionId      String
+  query          String
+  response       String
+  ragContext     Json?                          // Retrieved docs/chunks used
+  modelUsed      String?
+  latencyMs      Int?
+  feedback       Int?                           // -1, 0, 1 (thumbs down/neutral/up)
+  createdAt      DateTime @default(now())
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User?        @relation(fields: [userId], references: [id])
+
+  @@map("ai_assistant_logs")
+}
+
+// ============================================================
+// NOTIFICATIONS & ALERTS
+// ============================================================
+
+model Notification {
+  id             String           @id @default(cuid())
+  userId         String
+  type           NotificationType
+  title          String
+  body           String
+  referenceId    String?                        // ID of related entity
+  referenceType  String?                        // "ORDER", "MACHINE", "STOCK"
+  isRead         Boolean          @default(false)
+  readAt         DateTime?
+  createdAt      DateTime         @default(now())
+
+  user           User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
+}
+
+enum NotificationType {
+  ORDER_STATUS_CHANGE
+  LOW_STOCK_ALERT
+  MACHINE_BREAKDOWN
+  QUALITY_FAILURE
+  SHIPMENT_UPDATE
+  ATTENDANCE_ANOMALY
+  KPI_THRESHOLD_BREACH
+  AI_RECOMMENDATION
+  SYSTEM
+}
+
+// ============================================================
+// INTEGRATIONS — ERP / Tally / WhatsApp / IoT hooks
+// ============================================================
+
+model Integration {
+  id             String           @id @default(cuid())
+  organizationId String
+  type           IntegrationType
+  name           String
+  isActive       Boolean          @default(false)
+  configJson     Json?                          // Encrypted credentials/settings
+  webhookUrl     String?
+  lastSyncAt     DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, type])
+  @@map("integrations")
+}
+
+enum IntegrationType {
+  TALLY          // Indian SME accounting
+  WHATSAPP       // WhatsApp Business for alerts
+  SHOPIFY        // D2C brand orders
+  AMAZON_SELLER
+  FLIPKART_SELLER
+  CUSTOM_ERP
+  IOTGATEWAY     // MQTT/sensor bridge
+}
+
+// ============================================================
+// AUDIT LOGS — Immutable change trail
+// ============================================================
+
+model AuditLog {
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String?
+  action         String                         // "ORDER_CREATED", "STOCK_ADJUSTED"
+  entityType     String                         // "Order", "Material", etc.
+  entityId       String
+  oldValues      Json?
+  newValues      Json?
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime @default(now())
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User?        @relation(fields: [userId], references: [id])
+
+  @@map("audit_logs")
+}

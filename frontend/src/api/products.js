@@ -1,0 +1,15 @@
+import api from './axios.js';
+export const getProductLines = () => api.get('/products/lines');
+export const createProductLine = (d) => api.post('/products/lines', d);
+export const updateProductLine = (id, d) => api.patch(`/products/lines/${id}`, d);
+export const getStyleVariants = (p) => api.get('/products/variants', { params: p });
+export const getStyleVariant = (id) => api.get(`/products/variants/${id}`);
+export const createStyleVariant = (d) => api.post('/products/variants', d);
+export const updateStyleVariant = (id, d) => api.patch(`/products/variants/${id}`, d);
+export const getBom = (variantId) => api.get(`/products/variants/${variantId}/bom`);
+export const upsertBomItem = (d) => api.post('/products/bom', d);
+export const deleteBomItem = (id) => api.delete(`/products/bom/${id}`);
+export const getRoutings = (variantId) => api.get(`/products/variants/${variantId}/routing`);
+export const createRouting = (d) => api.post('/products/routing', d);
+export const updateRouting = (id, d) => api.patch(`/products/routing/${id}`, d);
+export const deleteRouting = (id) => api.delete(`/products/routing/${id}`);
