@@ -28,16 +28,17 @@ export default function ProductsPage() {
   const load = async () => {
     setLoading(true);
     const [l, v] = await Promise.allSettled([getProductLines(), getStyleVariants()]);
-    setLines(l.value?.data?.data || []);
-    setVariants(v.value?.data?.data?.data || v.value?.data?.data || []);
+    setLines(Array.isArray(l.value?.data?.data) ? l.value.data.data : []);
+    const vData = v.value?.data?.data?.data || v.value?.data?.data;
+    setVariants(Array.isArray(vData) ? vData : []);
     setLoading(false);
   };
 
   const loadVariantDetail = async (variant) => {
     setSelectedVariant(variant);
     const [b, r] = await Promise.allSettled([getBom(variant.id), getRoutings(variant.id)]);
-    setBom(b.value?.data?.data || []);
-    setRoutings(r.value?.data?.data || []);
+    setBom(Array.isArray(b.value?.data?.data) ? b.value.data.data : []);
+    setRoutings(Array.isArray(r.value?.data?.data) ? r.value.data.data : []);
     setTab('bom');
   };
 

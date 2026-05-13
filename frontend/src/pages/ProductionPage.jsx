@@ -75,7 +75,7 @@ export default function ProductionPage() {
             <div>
               {bottlenecks.map((b, i) => (
                 <div key={i} className="flex justify-between items-center" style={{ padding:'8px 0', borderBottom:'1px solid var(--border)' }}>
-                  <span className="text-sm">{b.operation || b.workCenter}</span>
+                  <span className="text-sm">{b.operation?.name || b.operation || b.workCenter?.name || b.workCenter}</span>
                   <span className="text-sm" style={{ color:'var(--warning)' }}>{b.avgWaitMin}min avg</span>
                 </div>
               ))}

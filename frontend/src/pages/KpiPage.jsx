@@ -30,9 +30,10 @@ export default function KpiPage() {
       getOee(), getOrderFulfillment(), getSnapshots(),
     ]);
     setKpi(results[0].value?.data?.data);
-    setEff(results[1].value?.data?.data || []);
-    setDhu(results[2].value?.data?.data || []);
-    setOee(results[3].value?.data?.data || []);
+    setEff(Array.isArray(results[1].value?.data?.data) ? results[1].value.data.data : []);
+    setDhu(Array.isArray(results[2].value?.data?.data) ? results[2].value.data.data : []);
+    const oeeRes = results[3].value?.data?.data;
+    setOee(oeeRes ? [oeeRes] : []);
     setFulfillment(results[4].value?.data?.data);
     setSnapshots(results[5].value?.data?.data || []);
     setLoading(false);
