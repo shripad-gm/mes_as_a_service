@@ -14,9 +14,9 @@ export default function DashboardPage() {
   useEffect(() => {
     Promise.all([getKpiDashboard(), getEfficiencyTrend(), getDhuTrend()])
       .then(([k, e, d]) => {
-        setKpi(k.data.data);
-        setEffTrend(e.data.data || []);
-        setDhuTrend(d.data.data || []);
+        setKpi(k.data?.data);
+        setEffTrend(Array.isArray(e.data?.data) ? e.data.data : []);
+        setDhuTrend(Array.isArray(d.data?.data) ? d.data.data : []);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
